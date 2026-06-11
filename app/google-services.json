@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "988815934768",
+    "project_id": "smart-cart-31777",
+    "storage_bucket": "smart-cart-31777.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:988815934768:android:02ae650f0787c5192174f5",
+        "android_client_info": {
+          "package_name": "com.yourbusiness.smartkart"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJIauK-QPU--0QAAqRhBx14hEAcBtzlOs"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
