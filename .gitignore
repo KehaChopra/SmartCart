@@ -13,3 +13,13 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Firebase / secrets — never commit to a public repo
+app/google-services.json
+functions/.secret.local
+functions/.env
+*.keystore
+*.jks
+
+# Local error logs
+.kotlin/

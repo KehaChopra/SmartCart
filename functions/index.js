@@ -9,9 +9,10 @@ const {initializeApp} = require("firebase-admin/app");
 const {getFirestore, FieldValue} = require("firebase-admin/firestore");
 const {setGlobalOptions} = require("firebase-functions/v2");
 const {onRequest} = require("firebase-functions/v2/https");
+const {defineSecret} = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 
-const CART_SECRET = "dca97aeccd376e8f0df9da4f9dd8138c0aeb10c9cef2224b0eb4e28688e329ef";
+const cartSecret = defineSecret("CART_SECRET");
 
 // ---------------------------------------------------------------------------
 // Firebase Admin SDK
@@ -80,7 +81,7 @@ function rejectUnauthorized(req, res) {
   if (rejectNonPost(req, res)) return true;
 
   const secret = (req.body || {}).secret;
-  if (secret !== CART_SECRET) {
+  if (secret !== cartSecret.value()) {
     res.status(403).json({error: "Unauthorized: invalid secret"});
     return true;
   }
@@ -127,7 +128,7 @@ function calculateTotalAmount(items) {
  * POST body: { cartId: string, userId: string }
  * Success: { success: true, sessionId: string }
  */
-exports.bindCartToUser = onRequest(async (req, res) => {
+exports.bindCartToUser = onRequest({secrets: [cartSecret]}, async (req, res) => {
   if (rejectUnauthorized(req, res)) return;
 
   const {cartId, userId} = req.body || {};
@@ -197,7 +198,7 @@ exports.bindCartToUser = onRequest(async (req, res) => {
  * POST body: { cartId: string, barcode: string }
  * Success: { success: true, item: object, totalAmount: number }
  */
-exports.addItemToCart = onRequest(async (req, res) => {
+exports.addItemToCart = onRequest({secrets: [cartSecret]}, async (req, res) => {
   if (rejectUnauthorized(req, res)) return;
 
   const {cartId, barcode} = req.body || {};
@@ -311,7 +312,7 @@ exports.addItemToCart = onRequest(async (req, res) => {
  * POST body: { cartId: string, barcode: string }
  * Success: { success: true, item: object | null, totalAmount: number }
  */
-exports.deleteItemFromCart = onRequest(async (req, res) => {
+exports.deleteItemFromCart = onRequest({secrets: [cartSecret]}, async (req, res) => {
   if (rejectUnauthorized(req, res)) return;
 
   const {cartId, barcode} = req.body || {};
