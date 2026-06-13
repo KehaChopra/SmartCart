@@ -1,6 +1,10 @@
 # SmartKart
 
-Android shopping app with Firebase Phone Auth, Firestore, QR cart binding, and real-time cart updates.
+SmartKart is an Android shopping app that turns a physical shopping cart into a smart cart. Customers scan a QR code on the cart to link it to their phone; as items are placed in the cart and scanned by the hardware, they appear instantly on the customer's phone in real time. Customers can remove items through the app and checkout and pay directly from their phone without going to a billing counter.
+
+The app communicates with a Firebase backend through Cloud Functions. The physical cart runs on a Raspberry Pi that scans barcodes and sends them to the server. Firebase Firestore acts as the real-time bridge between the cart hardware and the mobile app.
+
+Built with Kotlin Jetpack Compose, Firebase, and MVVM architecture.
 
 ## Tech Stack
 
