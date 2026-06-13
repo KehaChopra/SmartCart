@@ -2,6 +2,17 @@
 
 Android shopping app with Firebase Phone Auth, Firestore, QR cart binding, and real-time cart updates.
 
+## Tech Stack
+
+- Kotlin + Jetpack Compose
+- Firebase Auth (Phone Authentication)
+- Cloud Firestore (real-time listener)
+- Firebase Cloud Functions (Node.js)
+- Retrofit (API calls)
+- ML Kit Barcode Scanning
+- MVVM Architecture
+- Kotlin Coroutines and StateFlow
+
 ## Prerequisites
 
 - Android Studio (latest stable)
