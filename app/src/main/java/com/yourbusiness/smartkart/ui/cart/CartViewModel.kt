@@ -39,24 +39,16 @@ class CartViewModel(
         viewModelScope.launch {
             _uiState.value = CartUiState.Loading
 
-            sessionRepository.getSessionIdForCart(cartId)
-                .onSuccess { sessionId ->
-                    sessionRepository.observeSession(sessionId) { result ->
-                        result.fold(
-                            onSuccess = { session -> updateUiFromSession(session) },
-                            onFailure = { exception ->
-                                _uiState.value = CartUiState.Error(
-                                    sessionRepository.mapExceptionToMessage(exception)
-                                )
-                            }
+            sessionRepository.observeCartSession(cartId) { result ->
+                result.fold(
+                    onSuccess = { session -> updateUiFromSession(session) },
+                    onFailure = { exception ->
+                        _uiState.value = CartUiState.Error(
+                            sessionRepository.mapExceptionToMessage(exception)
                         )
                     }
-                }
-                .onFailure { exception ->
-                    _uiState.value = CartUiState.Error(
-                        sessionRepository.mapExceptionToMessage(exception)
-                    )
-                }
+                )
+            }
         }
     }
 

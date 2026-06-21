@@ -1,6 +1,7 @@
 package com.yourbusiness.smartkart.ui.cart.components
 
 import android.util.Log
+import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.Preview
@@ -8,6 +9,8 @@ import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -28,7 +31,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 fun BarcodeCameraPreview(
     isScanningEnabled: Boolean,
     onBarcodeDetected: (String) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    torchEnabled: Boolean = false
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -44,6 +48,11 @@ fun BarcodeCameraPreview(
         PreviewView(context).apply {
             implementationMode = PreviewView.ImplementationMode.COMPATIBLE
         }
+    }
+    val boundCamera = remember { mutableStateOf<Camera?>(null) }
+
+    LaunchedEffect(torchEnabled, boundCamera.value) {
+        boundCamera.value?.cameraControl?.enableTorch(torchEnabled)
     }
 
     DisposableEffect(lifecycleOwner, previewView) {
@@ -99,12 +108,13 @@ fun BarcodeCameraPreview(
                 }
 
                 provider.unbindAll()
-                provider.bindToLifecycle(
+                boundCamera.value = provider.bindToLifecycle(
                     lifecycleOwner,
                     CameraSelector.DEFAULT_BACK_CAMERA,
                     preview,
                     imageAnalysis
                 )
+                boundCamera.value?.cameraControl?.enableTorch(torchEnabled)
             }.onFailure { exception ->
                 Log.e(TAG, "Camera binding failed", exception)
             }
@@ -112,6 +122,7 @@ fun BarcodeCameraPreview(
 
         onDispose {
             bindJob.cancel()
+            boundCamera.value = null
             cameraProvider?.unbindAll()
             barcodeScanner.close()
             cameraExecutor.shutdown()

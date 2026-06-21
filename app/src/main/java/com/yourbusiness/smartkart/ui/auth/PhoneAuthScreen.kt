@@ -3,6 +3,7 @@ package com.yourbusiness.smartkart.ui.auth
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.IconButton
@@ -33,6 +34,7 @@ fun PhoneAuthScreen(
     }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             if (viewModel.step == PhoneAuthStep.OTP) {
                 TopAppBar(
@@ -57,7 +59,8 @@ fun PhoneAuthScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
-                .padding(horizontal = 24.dp, vertical = 16.dp)
+                .padding(horizontal = 16.dp, vertical = 16.dp)
+                .imePadding()
         ) {
             when (viewModel.step) {
                 PhoneAuthStep.PHONE_NUMBER -> {

@@ -15,6 +15,7 @@ import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.PhoneAuthCredential
 import com.google.firebase.auth.PhoneAuthOptions
 import com.google.firebase.auth.PhoneAuthProvider
+import com.yourbusiness.smartkart.BuildConfig
 import com.yourbusiness.smartkart.ui.auth.model.Country
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -33,6 +34,14 @@ class PhoneAuthViewModel : ViewModel() {
     private var verificationId: String? = null
     private var forceResendingToken: PhoneAuthProvider.ForceResendingToken? = null
     private var countdownJob: Job? = null
+
+    init {
+        if (BuildConfig.DEBUG) {
+            // Helps debug environments where Play Integrity fails to provide an app verifier.
+            firebaseAuth.firebaseAuthSettings.forceRecaptchaFlowForTesting(true)
+            Log.d(TAG, "Enabled forced reCAPTCHA flow for debug build")
+        }
+    }
 
     var onAuthSuccess: (() -> Unit)? = null
 
@@ -179,19 +188,26 @@ class PhoneAuthViewModel : ViewModel() {
                 signInWithCredential(credential)
             }
 
-            override fun onVerificationFailed(exception: FirebaseException) {
-                val authErrorCode = (exception as? FirebaseAuthException)?.errorCode
+            override fun onVerificationFailed(e: FirebaseException) {
+                Log.e("PHONE_AUTH_DEBUG", "Error class: ${e.javaClass.simpleName}")
+                Log.e("PHONE_AUTH_DEBUG", "Error message: ${e.message}")
+                if (e is FirebaseAuthException) {
+                    Log.e("PHONE_AUTH_DEBUG", "Error code: ${e.errorCode}")
+                }
+                Log.e("PHONE_AUTH_DEBUG", "Full stack trace: ", e)
+
+                val authErrorCode = (e as? FirebaseAuthException)?.errorCode
                 Log.e(
                     TAG,
-                    "Phone verification failed: errorCode=$authErrorCode, message=${exception.message}",
-                    exception
+                    "Phone verification failed: errorCode=$authErrorCode, message=${e.message}",
+                    e
                 )
                 if (isResend) {
                     isResendingOtp = false
-                    otpError = mapFirebaseException(exception, forOtpStep = true)
+                    otpError = mapFirebaseException(e, forOtpStep = true)
                 } else {
                     isSendingOtp = false
-                    phoneError = mapFirebaseException(exception, forOtpStep = false)
+                    phoneError = mapFirebaseException(e, forOtpStep = false)
                 }
             }
 
@@ -282,6 +298,14 @@ class PhoneAuthViewModel : ViewModel() {
         exception: FirebaseException,
         forOtpStep: Boolean
     ): String {
+        val rawMessage = exception.localizedMessage.orEmpty()
+        if (rawMessage.contains("app identifier", ignoreCase = true) ||
+            rawMessage.contains("Play Integrity", ignoreCase = true) ||
+            rawMessage.contains("reCAPTCHA", ignoreCase = true)
+        ) {
+            return buildAppIdentifierErrorMessage()
+        }
+
         if (exception is FirebaseTooManyRequestsException) {
             return "Too many attempts. Firebase has temporarily blocked OTP requests. " +
                 "Wait 1–2 hours, or use a test phone number in Firebase Console for development."
@@ -327,8 +351,7 @@ class PhoneAuthViewModel : ViewModel() {
                     "This account has been disabled. Contact support."
 
                 AuthError.APP_NOT_AUTHORIZED ->
-                    "App not authorized. Confirm package name com.yourbusiness.smartkart, " +
-                        "debug SHA-1 in Firebase Console, and the latest google-services.json."
+                    buildAppIdentifierErrorMessage()
 
                 AuthError.OPERATION_NOT_ALLOWED ->
                     mapOperationNotAllowedMessage(exception)
@@ -353,6 +376,13 @@ class PhoneAuthViewModel : ViewModel() {
             else -> message.takeIf { it.isNotBlank() }
                 ?: "Phone sign-in is not allowed for this Firebase project."
         }
+    }
+
+    private fun buildAppIdentifierErrorMessage(): String {
+        return "Firebase could not verify this app. Uninstall SmartKart, then in Android Studio " +
+            "run Build → Clean Project → Rebuild Project, and install the new APK. " +
+            "If it still fails, confirm SHA-1/SHA-256 are in Firebase and google-services.json " +
+            "has oauth_client entries."
     }
 
     private object AuthError {

@@ -13,12 +13,15 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
+import com.yourbusiness.smartkart.data.model.SessionItem
 import com.yourbusiness.smartkart.data.repository.UserRepository
 import com.yourbusiness.smartkart.ui.auth.PhoneAuthScreen
 import com.yourbusiness.smartkart.ui.cart.CartGateScreen
 import com.yourbusiness.smartkart.ui.cart.CartCheckViewModel
 import com.yourbusiness.smartkart.ui.cart.CartScreen
 import com.yourbusiness.smartkart.ui.cart.QrScannerScreen
+import com.yourbusiness.smartkart.ui.checkout.CheckoutScreen
+import com.yourbusiness.smartkart.ui.checkout.CheckoutSuccessScreen
 import com.yourbusiness.smartkart.ui.profile.ProfileGateScreen
 import com.yourbusiness.smartkart.ui.profile.ProfileSetupScreen
 import com.yourbusiness.smartkart.ui.profile.ProfileSetupViewModel
@@ -30,7 +33,9 @@ private enum class AppDestination {
     PROFILE_SETUP,
     CART_GATE,
     QR_SCANNER,
-    CART
+    CART,
+    CHECKOUT,
+    CHECKOUT_SUCCESS
 }
 
 class MainActivity : ComponentActivity() {
@@ -76,12 +81,16 @@ private fun SmartKartApp(
     }
 
     var activeCartId by remember { mutableStateOf<String?>(null) }
+    var checkoutTotal by remember { mutableStateOf(0.0) }
+    var checkoutItems by remember { mutableStateOf<List<SessionItem>>(emptyList()) }
 
     fun signOut() {
         firebaseAuth.signOut()
         profileViewModel.resetForSignOut()
         cartCheckViewModel.resetForSignOut()
         activeCartId = null
+        checkoutTotal = 0.0
+        checkoutItems = emptyList()
         destination = AppDestination.AUTH
     }
 
@@ -146,11 +155,46 @@ private fun SmartKartApp(
             if (cartId != null) {
                 CartScreen(
                     cartId = cartId,
+                    onCheckout = { total, items ->
+                        checkoutTotal = total
+                        checkoutItems = items
+                        destination = AppDestination.CHECKOUT
+                    },
                     onSignOut = ::signOut
                 )
             } else {
                 destination = AppDestination.QR_SCANNER
             }
+        }
+
+        AppDestination.CHECKOUT -> {
+            val cartId = UserRepository.parseActiveCartValue(activeCartId)
+            if (cartId != null) {
+                CheckoutScreen(
+                    cartId = cartId,
+                    totalAmount = checkoutTotal,
+                    items = checkoutItems,
+                    onPaymentSuccess = { total ->
+                        checkoutTotal = total
+                        destination = AppDestination.CHECKOUT_SUCCESS
+                    },
+                    onBack = { destination = AppDestination.CART }
+                )
+            } else {
+                destination = AppDestination.QR_SCANNER
+            }
+        }
+
+        AppDestination.CHECKOUT_SUCCESS -> {
+            CheckoutSuccessScreen(
+                cartId = UserRepository.parseActiveCartValue(activeCartId).orEmpty(),
+                totalAmount = checkoutTotal,
+                onDone = {
+                    activeCartId = null
+                    checkoutItems = emptyList()
+                    goToCartCheck()
+                }
+            )
         }
     }
 }

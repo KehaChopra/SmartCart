@@ -38,6 +38,6 @@ data class Country(
             Country("Bangladesh", "BD", "+880"),
             Country("China", "CN", "+86")
         ).sortedBy { it.name }
-        val default = countries.first { it.isoCode == "US" }
+        val default = countries.first { it.isoCode == "IN" }
     }
 }
