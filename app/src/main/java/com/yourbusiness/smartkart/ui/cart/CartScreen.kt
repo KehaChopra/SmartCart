@@ -48,17 +48,31 @@ import com.yourbusiness.smartkart.ui.theme.SmartKartTheme
 fun CartScreen(
     cartId: String,
     onCheckout: (totalAmount: Double, items: List<SessionItem>) -> Unit,
+    onNavigateToScanner: () -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CartViewModel = viewModel(factory = CartViewModelFactory(cartId))
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val navigationState by viewModel.navigationState.collectAsStateWithLifecycle()
     val removingBarcodes by viewModel.removingBarcodes.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
     LaunchedEffect(viewModel) {
         viewModel.snackbarMessage.collect { message ->
             snackbarHostState.showSnackbar(message)
+        }
+    }
+
+    LaunchedEffect(navigationState) {
+        when (val state = navigationState) {
+            is CartNavigationState.NavigateToScanner -> {
+                snackbarHostState.showSnackbar(state.message)
+                viewModel.onNavigationHandled()
+                onNavigateToScanner()
+            }
+
+            CartNavigationState.Idle -> Unit
         }
     }
 

@@ -170,6 +170,22 @@ class SessionRepository(
             ?: "Could not load your cart. Please try again."
     }
 
+    fun isSessionEndedError(exception: Throwable): Boolean {
+        if (exception !is IllegalStateException) return false
+
+        val message = exception.message.orEmpty().lowercase()
+        return message.contains("cart not found") ||
+            message.contains("no active session") ||
+            message.contains("shopping session not found") ||
+            message.contains("scan a cart") ||
+            message.contains("scan the cart qr")
+    }
+
+    fun isSessionInactive(session: ShoppingSession): Boolean {
+        return session.status.isNotBlank() &&
+            !session.status.equals(SESSION_STATUS_ACTIVE, ignoreCase = true)
+    }
+
     private fun parseSession(snapshot: DocumentSnapshot): ShoppingSession {
         val sessionId = snapshot.getString(FIELD_SESSION_ID) ?: snapshot.id
         val cartId = snapshot.getString(FIELD_CART_ID)
@@ -289,5 +305,6 @@ class SessionRepository(
         private const val FIELD_ITEMS = "items"
         private const val FIELD_TOTAL_AMOUNT = "totalAmount"
         private const val FIELD_STATUS = "status"
+        private const val SESSION_STATUS_ACTIVE = "active"
     }
 }

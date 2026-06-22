@@ -160,6 +160,10 @@ private fun SmartKartApp(
                         checkoutItems = items
                         destination = AppDestination.CHECKOUT
                     },
+                    onNavigateToScanner = {
+                        activeCartId = null
+                        destination = AppDestination.QR_SCANNER
+                    },
                     onSignOut = ::signOut
                 )
             } else {

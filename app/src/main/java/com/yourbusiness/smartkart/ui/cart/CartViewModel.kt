@@ -3,10 +3,12 @@ package com.yourbusiness.smartkart.ui.cart
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.google.firebase.auth.FirebaseAuth
 import com.yourbusiness.smartkart.data.model.ShoppingSession
 import com.yourbusiness.smartkart.data.model.calculateTotalAmount
 import com.yourbusiness.smartkart.data.repository.CartRepository
 import com.yourbusiness.smartkart.data.repository.SessionRepository
+import com.yourbusiness.smartkart.data.repository.UserRepository
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -19,17 +21,24 @@ import kotlinx.coroutines.launch
 class CartViewModel(
     private val cartId: String,
     private val sessionRepository: SessionRepository = SessionRepository(),
-    private val cartRepository: CartRepository = CartRepository()
+    private val cartRepository: CartRepository = CartRepository(),
+    private val userRepository: UserRepository = UserRepository(),
+    private val auth: FirebaseAuth = FirebaseAuth.getInstance()
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow<CartUiState>(CartUiState.Loading)
     val uiState: StateFlow<CartUiState> = _uiState.asStateFlow()
+
+    private val _navigationState = MutableStateFlow<CartNavigationState>(CartNavigationState.Idle)
+    val navigationState: StateFlow<CartNavigationState> = _navigationState.asStateFlow()
 
     private val _removingBarcodes = MutableStateFlow<Set<String>>(emptySet())
     val removingBarcodes: StateFlow<Set<String>> = _removingBarcodes.asStateFlow()
 
     private val _snackbarMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val snackbarMessage: SharedFlow<String> = _snackbarMessage.asSharedFlow()
+
+    private var hasHandledSessionEnded = false
 
     init {
         startSessionListener()
@@ -43,9 +52,13 @@ class CartViewModel(
                 result.fold(
                     onSuccess = { session -> updateUiFromSession(session) },
                     onFailure = { exception ->
-                        _uiState.value = CartUiState.Error(
-                            sessionRepository.mapExceptionToMessage(exception)
-                        )
+                        if (sessionRepository.isSessionEndedError(exception)) {
+                            handleSessionEnded()
+                        } else {
+                            _uiState.value = CartUiState.Error(
+                                sessionRepository.mapExceptionToMessage(exception)
+                            )
+                        }
                     }
                 )
             }
@@ -72,8 +85,13 @@ class CartViewModel(
     }
 
     fun retry() {
+        hasHandledSessionEnded = false
         sessionRepository.removeListener()
         startSessionListener()
+    }
+
+    fun onNavigationHandled() {
+        _navigationState.value = CartNavigationState.Idle
     }
 
     override fun onCleared() {
@@ -81,7 +99,29 @@ class CartViewModel(
         super.onCleared()
     }
 
+    private fun handleSessionEnded() {
+        if (hasHandledSessionEnded) return
+        hasHandledSessionEnded = true
+
+        sessionRepository.removeListener()
+        _uiState.value = CartUiState.Loading
+
+        viewModelScope.launch {
+            val uid = auth.currentUser?.uid
+            if (!uid.isNullOrBlank()) {
+                userRepository.clearActiveCart(uid)
+            }
+
+            _navigationState.value = CartNavigationState.NavigateToScanner()
+        }
+    }
+
     private fun updateUiFromSession(session: ShoppingSession) {
+        if (sessionRepository.isSessionInactive(session)) {
+            handleSessionEnded()
+            return
+        }
+
         _removingBarcodes.update { current ->
             current.filter { barcode ->
                 session.items.any { it.barcode == barcode }

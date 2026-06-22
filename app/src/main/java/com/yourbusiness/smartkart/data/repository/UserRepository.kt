@@ -53,6 +53,18 @@ class UserRepository(
         }
     }
 
+    suspend fun clearActiveCart(uid: String): Result<Unit> {
+        return try {
+            firestore.collection(USERS_COLLECTION)
+                .document(uid)
+                .update(FIELD_ACTIVE_CART, null)
+                .await()
+            Result.success(Unit)
+        } catch (exception: Exception) {
+            Result.failure(exception)
+        }
+    }
+
     suspend fun createUserProfile(name: String): Result<Unit> {
         val currentUser = auth.currentUser
             ?: return Result.failure(IllegalStateException("You are not signed in. Please log in again."))
