@@ -22,6 +22,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -171,11 +175,22 @@ fun SmartKartPhoneInputField(
     modifier: Modifier = Modifier
 ) {
     val shape = RoundedCornerShape(12.dp)
-    val borderColor = if (phoneError != null) {
-        MaterialTheme.colorScheme.error
-    } else {
-        MaterialTheme.colorScheme.outline
+    val interactionSource = remember { MutableInteractionSource() }
+    val isFocused by interactionSource.collectIsFocusedAsState()
+
+    val targetBorderColor = when {
+        phoneError != null -> MaterialTheme.colorScheme.error
+        isFocused -> SmartKartGreen
+        else -> MaterialTheme.colorScheme.outline
     }
+    val borderColor by animateColorAsState(
+        targetValue = targetBorderColor,
+        label = "phone_border_color"
+    )
+    val borderWidth by animateDpAsState(
+        targetValue = if (isFocused && phoneError == null) 1.5.dp else 1.dp,
+        label = "phone_border_width"
+    )
 
     Column(modifier = modifier) {
         Text(
@@ -189,7 +204,7 @@ fun SmartKartPhoneInputField(
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(shape)
-                .border(width = 1.dp, color = borderColor, shape = shape)
+                .border(width = borderWidth, color = borderColor, shape = shape)
                 .background(MaterialTheme.colorScheme.surface)
         ) {
             Row(
@@ -221,6 +236,7 @@ fun SmartKartPhoneInputField(
                     ),
                     cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone),
+                    interactionSource = interactionSource,
                     decorationBox = { innerTextField ->
                         Box {
                             if (phoneNumber.isEmpty()) {

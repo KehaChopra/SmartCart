@@ -18,7 +18,7 @@ import androidx.core.view.WindowCompat
 
 private val SmartKartLightColorScheme = lightColorScheme(
     primary = SmartKartGreen,
-    onPrimary = SmartKartBackground,
+    onPrimary = Color.White,
     primaryContainer = SmartKartGreenLight,
     onPrimaryContainer = SmartKartGreenDark,
     background = SmartKartBackground,
@@ -28,6 +28,8 @@ private val SmartKartLightColorScheme = lightColorScheme(
     onSurfaceVariant = SmartKartTextSecondary,
     outline = SmartKartBorder,
     surfaceVariant = SmartKartButtonDisabled,
+    error = SmartKartError,
+    onError = Color.White,
     errorContainer = SmartKartDeleteRed,
     onErrorContainer = SmartKartDeleteIcon
 )
@@ -44,6 +46,8 @@ private val SmartKartDarkColorScheme = darkColorScheme(
     onSurfaceVariant = SmartKartDarkTextSecondary,
     outline = SmartKartDarkBorder,
     surfaceVariant = SmartKartDarkButtonDisabled,
+    error = SmartKartError,
+    onError = Color.White,
     errorContainer = SmartKartDarkDeleteRed,
     onErrorContainer = SmartKartDeleteIcon
 )

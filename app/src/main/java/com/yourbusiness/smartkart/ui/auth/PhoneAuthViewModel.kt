@@ -15,7 +15,6 @@ import com.google.firebase.auth.FirebaseAuthException
 import com.google.firebase.auth.PhoneAuthCredential
 import com.google.firebase.auth.PhoneAuthOptions
 import com.google.firebase.auth.PhoneAuthProvider
-import com.yourbusiness.smartkart.BuildConfig
 import com.yourbusiness.smartkart.ui.auth.model.Country
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -34,14 +33,6 @@ class PhoneAuthViewModel : ViewModel() {
     private var verificationId: String? = null
     private var forceResendingToken: PhoneAuthProvider.ForceResendingToken? = null
     private var countdownJob: Job? = null
-
-    init {
-        if (BuildConfig.DEBUG) {
-            // Helps debug environments where Play Integrity fails to provide an app verifier.
-            firebaseAuth.firebaseAuthSettings.forceRecaptchaFlowForTesting(true)
-            Log.d(TAG, "Enabled forced reCAPTCHA flow for debug build")
-        }
-    }
 
     var onAuthSuccess: (() -> Unit)? = null
 
