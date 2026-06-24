@@ -11,8 +11,14 @@ const {setGlobalOptions} = require("firebase-functions/v2");
 const {onRequest} = require("firebase-functions/v2/https");
 const {defineSecret} = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
+const crypto = require("crypto");
+const Razorpay = require("razorpay");
 
 const cartSecret = defineSecret("CART_SECRET");
+const razorpayKeyId = defineSecret("RAZORPAY_KEY_ID");
+const razorpayKeySecret = defineSecret("RAZORPAY_KEY_SECRET");
+
+const paymentSecrets = [cartSecret, razorpayKeyId, razorpayKeySecret];
 
 // ---------------------------------------------------------------------------
 // Firebase Admin SDK
@@ -30,16 +36,24 @@ const COLLECTIONS = {
   CARTS: "carts",
   PRODUCTS: "products",
   SESSIONS: "sessions",
+  PAYMENTS: "payments",
+  USERS: "users",
 };
 
 const CART_STATUS = {
   AVAILABLE: "available",
   OCCUPIED: "occupied",
+  IDLE: "idle",
 };
 
 const SESSION_STATUS = {
   ACTIVE: "active",
   COMPLETED: "completed",
+};
+
+const PAYMENT_STATUS = {
+  PENDING: "PENDING",
+  PAID: "PAID",
 };
 
 // ---------------------------------------------------------------------------
@@ -107,15 +121,124 @@ function sendSuccess(res, data) {
 }
 
 /**
- * @param {Array<{price?: number, quantity?: number}>} items
+ * @param {Array<{price?: number, quantity?: number}>|Object|null|undefined} items
+ * @return {Array<{price?: number, quantity?: number}>}
+ */
+function normalizeItemsArray(items) {
+  if (!items) return [];
+  if (Array.isArray(items)) return [...items];
+  if (typeof items === "object") return Object.values(items);
+  return [];
+}
+
+/**
+ * @param {object} item
+ * @return {number}
+ */
+function resolveItemPrice(item) {
+  for (const key of ["price", "cost", "unitPrice", "amount"]) {
+    if (item[key] == null) continue;
+    const value = Number(item[key]);
+    if (!Number.isNaN(value)) return value;
+  }
+  return 0;
+}
+
+/**
+ * @param {object} item
+ * @return {number}
+ */
+function resolveItemQuantity(item) {
+  for (const key of ["qty", "quantity", "count"]) {
+    if (item[key] == null) continue;
+    const value = Number(item[key]);
+    if (!Number.isNaN(value) && value > 0) return value;
+  }
+  return 1;
+}
+
+/**
+ * @param {Array<{price?: number, quantity?: number}>|Object|null|undefined} items
  * @return {number}
  */
 function calculateTotalAmount(items) {
-  return items.reduce((sum, item) => {
-    const price = Number(item.price) || 0;
-    const quantity = Number(item.quantity) || 0;
+  return normalizeItemsArray(items).reduce((sum, item) => {
+    const price = resolveItemPrice(item);
+    const quantity = resolveItemQuantity(item);
     return sum + price * quantity;
   }, 0);
+}
+
+/**
+ * @param {number} first
+ * @param {number} second
+ * @return {boolean}
+ */
+function totalsAreEqual(first, second) {
+  return Math.abs(Number(first) - Number(second)) < 0.01;
+}
+
+/**
+ * @return {import("razorpay")}
+ */
+function getRazorpayClient() {
+  const keyId = razorpayKeyId.value();
+  const keySecret = razorpayKeySecret.value();
+  if (!keyId || !keySecret) {
+    throw new Error("Razorpay credentials are not configured");
+  }
+
+  return new Razorpay({
+    key_id: keyId,
+    key_secret: keySecret,
+  });
+}
+
+/**
+ * @param {number} amountInRupees
+ * @return {number}
+ */
+function rupeesToPaise(amountInRupees) {
+  return Math.round(Number(amountInRupees) * 100);
+}
+
+/**
+ * @param {string} orderId
+ * @param {string} paymentId
+ * @param {string} signature
+ * @return {boolean}
+ */
+function verifyRazorpaySignature(orderId, paymentId, signature) {
+  const keySecret = razorpayKeySecret.value();
+  if (!keySecret) {
+    throw new Error("Razorpay credentials are not configured");
+  }
+
+  const expectedSignature = crypto
+      .createHmac("sha256", keySecret)
+      .update(`${orderId}|${paymentId}`)
+      .digest("hex");
+
+  const receivedBuffer = Buffer.from(signature, "utf8");
+  const expectedBuffer = Buffer.from(expectedSignature, "utf8");
+
+  if (receivedBuffer.length !== expectedBuffer.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(receivedBuffer, expectedBuffer);
+}
+
+/**
+ * @param {import("firebase-functions/v2/https").Response} res
+ * @param {string} reason
+ */
+function sendPaymentFailed(res, reason) {
+  res.status(200).json({
+    success: false,
+    status: "failed",
+    reason,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +382,7 @@ exports.addItemToCart = onRequest({secrets: [cartSecret]}, async (req, res) => {
         throw new Error("No active session");
       }
 
-      const items = Array.isArray(session.items) ? [...session.items] : [];
+      const items = normalizeItemsArray(session.items);
       const existingIndex = items.findIndex(
           (item) => item.productId === productId,
       );
@@ -353,7 +476,7 @@ exports.deleteItemFromCart = onRequest({secrets: [cartSecret]}, async (req, res)
         throw new Error("No active session");
       }
 
-      const items = Array.isArray(session.items) ? [...session.items] : [];
+      const items = normalizeItemsArray(session.items);
       const existingIndex = items.findIndex(
           (item) => item.barcode === barcode,
       );
@@ -399,5 +522,210 @@ exports.deleteItemFromCart = onRequest({secrets: [cartSecret]}, async (req, res)
 
     logger.error("deleteItemFromCart failed", {cartId, barcode, error: message});
     sendError(res, 500, "Internal server error");
+  }
+});
+
+/**
+ * Creates a Razorpay order for an active shopping session.
+ *
+ * POST body: { cartId: string, sessionId: string, secret: string }
+ * Success: {
+ *   success: true,
+ *   orderId: string,
+ *   amountPaise: number,
+ *   currency: string,
+ *   razorpayKeyId: string
+ * }
+ */
+exports.createOrder = onRequest({secrets: paymentSecrets}, async (req, res) => {
+  if (rejectUnauthorized(req, res)) return;
+
+  const {cartId, sessionId} = req.body || {};
+
+  if (!cartId || !sessionId) {
+    sendError(res, 400, "cartId and sessionId are required");
+    return;
+  }
+
+  try {
+    const sessionRef = db.collection(COLLECTIONS.SESSIONS).doc(sessionId);
+    const sessionSnap = await sessionRef.get();
+
+    if (!sessionSnap.exists) {
+      sendError(res, 404, "Session not found");
+      return;
+    }
+
+    const session = sessionSnap.data();
+    if (session.status !== SESSION_STATUS.ACTIVE) {
+      sendError(res, 400, "Session is not active");
+      return;
+    }
+
+    if (session.cartId !== cartId) {
+      sendError(res, 400, "Session does not belong to this cart");
+      return;
+    }
+
+    const calculatedTotal = calculateTotalAmount(session.items);
+    const storedTotal = Number(session.totalAmount) || 0;
+    const totalAmount = calculatedTotal > 0 ? calculatedTotal : storedTotal;
+
+    if (calculatedTotal > 0 && !totalsAreEqual(calculatedTotal, storedTotal)) {
+      await sessionRef.update({totalAmount: calculatedTotal});
+    }
+
+    if (totalAmount <= 0) {
+      sendError(res, 400, "Cart total must be greater than zero");
+      return;
+    }
+
+    const amountPaise = rupeesToPaise(totalAmount);
+    const razorpay = getRazorpayClient();
+
+    const order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt: sessionId,
+    });
+
+    const paymentRef = db.collection(COLLECTIONS.PAYMENTS).doc(order.id);
+    await paymentRef.set({
+      orderId: order.id,
+      sessionId,
+      cartId,
+      userId: session.userId || "",
+      status: PAYMENT_STATUS.PENDING,
+      amount: amountPaise,
+      createdAt: FieldValue.serverTimestamp(),
+    });
+
+    sendSuccess(res, {
+      orderId: order.id,
+      amountPaise,
+      currency: order.currency || "INR",
+      razorpayKeyId: razorpayKeyId.value(),
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    logger.error("createOrder failed", {cartId, sessionId, error: message});
+    sendError(res, 500, message === "Razorpay credentials are not configured"
+      ? message
+      : "Could not create payment order");
+  }
+});
+
+/**
+ * Verifies a Razorpay payment and completes the shopping session.
+ *
+ * POST body: {
+ *   orderId: string,
+ *   paymentId: string,
+ *   signature: string,
+ *   secret: string
+ * }
+ * Success: { success: true, status: "paid", sessionId: string, cartId: string }
+ * Failure: { success: false, status: "failed", reason: string }
+ */
+exports.verifyPayment = onRequest({secrets: paymentSecrets}, async (req, res) => {
+  if (rejectUnauthorized(req, res)) return;
+
+  const {orderId, paymentId, signature} = req.body || {};
+
+  if (!orderId || !paymentId || !signature) {
+    sendError(res, 400, "orderId, paymentId, and signature are required");
+    return;
+  }
+
+  try {
+    if (!verifyRazorpaySignature(orderId, paymentId, signature)) {
+      sendPaymentFailed(res, "Invalid payment signature");
+      return;
+    }
+
+    const paymentRef = db.collection(COLLECTIONS.PAYMENTS).doc(orderId);
+    const paymentSnap = await paymentRef.get();
+
+    if (!paymentSnap.exists) {
+      sendPaymentFailed(res, "Payment order not found");
+      return;
+    }
+
+    const payment = paymentSnap.data();
+    if (payment.status === PAYMENT_STATUS.PAID) {
+      sendSuccess(res, {
+        status: "paid",
+        sessionId: payment.sessionId,
+        cartId: payment.cartId,
+      });
+      return;
+    }
+
+    const razorpay = getRazorpayClient();
+    const razorpayPayment = await razorpay.payments.fetch(paymentId);
+
+    if (razorpayPayment.status !== "captured") {
+      sendPaymentFailed(res, `Payment not captured (status: ${razorpayPayment.status})`);
+      return;
+    }
+
+    const {sessionId, cartId, userId} = payment;
+    if (!sessionId || !cartId || !userId) {
+      sendPaymentFailed(res, "Payment record is missing session or cart details");
+      return;
+    }
+
+    const sessionRef = db.collection(COLLECTIONS.SESSIONS).doc(sessionId);
+    const cartRef = db.collection(COLLECTIONS.CARTS).doc(cartId);
+    const userRef = db.collection(COLLECTIONS.USERS).doc(userId);
+
+    await db.runTransaction(async (transaction) => {
+      const sessionSnap = await transaction.get(sessionRef);
+      if (!sessionSnap.exists) {
+        throw new Error("Session not found");
+      }
+
+      transaction.update(paymentRef, {
+        status: PAYMENT_STATUS.PAID,
+        razorpayPaymentId: paymentId,
+        razorpaySignature: signature,
+        paidAt: FieldValue.serverTimestamp(),
+      });
+
+      transaction.update(sessionRef, {
+        status: SESSION_STATUS.COMPLETED,
+      });
+
+      transaction.update(cartRef, {
+        status: CART_STATUS.IDLE,
+        pairedUid: null,
+        currentSessionId: null,
+      });
+
+      transaction.update(userRef, {
+        activeCart: null,
+      });
+    });
+
+    sendSuccess(res, {
+      status: "paid",
+      sessionId,
+      cartId,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    logger.error("verifyPayment failed", {orderId, paymentId, error: message});
+
+    if (message === "Session not found") {
+      sendPaymentFailed(res, message);
+      return;
+    }
+
+    if (message === "Razorpay credentials are not configured") {
+      sendError(res, 500, message);
+      return;
+    }
+
+    sendPaymentFailed(res, "Could not verify payment");
   }
 });

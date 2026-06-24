@@ -1,8 +1,11 @@
 package com.yourbusiness.smartkart.ui.checkout
 
 sealed class CheckoutUiState {
-    data class Ready(val totalAmount: Double) : CheckoutUiState()
-    data object Processing : CheckoutUiState()
-    data class Success(val totalAmount: Double) : CheckoutUiState()
+    data object Loading : CheckoutUiState()
+    data object CreatingOrder : CheckoutUiState()
+    data object AwaitingPayment : CheckoutUiState()
+    data object VerifyingPayment : CheckoutUiState()
+    data class PaymentSuccess(val cartId: String) : CheckoutUiState()
+    data class PaymentFailed(val reason: String) : CheckoutUiState()
     data class Error(val message: String) : CheckoutUiState()
 }

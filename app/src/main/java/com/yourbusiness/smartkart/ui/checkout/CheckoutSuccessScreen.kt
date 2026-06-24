@@ -1,5 +1,11 @@
 package com.yourbusiness.smartkart.ui.checkout
 
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,19 +31,18 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.yourbusiness.smartkart.ui.cart.formatRupee
 import com.yourbusiness.smartkart.ui.theme.SmartKartGreen
-import com.yourbusiness.smartkart.ui.theme.SmartKartGreenPill
 import com.yourbusiness.smartkart.ui.theme.SmartKartTheme
-import kotlin.math.abs
 
 @Composable
 fun CheckoutSuccessScreen(
@@ -46,15 +51,6 @@ fun CheckoutSuccessScreen(
     onDone: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val transactionId = remember(totalAmount, cartId) {
-        generateTransactionId(cartId, totalAmount)
-    }
-    val displayTotal = remember(totalAmount) {
-        val subtotal = totalAmount
-        val gst = subtotal * GST_RATE
-        subtotal + gst
-    }
-
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         modifier = modifier
@@ -72,12 +68,12 @@ fun CheckoutSuccessScreen(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                SuccessIcon()
+                AnimatedSuccessIcon()
 
                 Spacer(modifier = Modifier.height(24.dp))
 
                 Text(
-                    text = "Payment Successful!",
+                    text = "Payment Successful",
                     style = MaterialTheme.typography.headlineMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground,
@@ -112,7 +108,7 @@ fun CheckoutSuccessScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "$cartId · Unlocked",
+                            text = cartId,
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.SemiBold,
                             color = SmartKartGreen
@@ -122,9 +118,11 @@ fun CheckoutSuccessScreen(
 
                 Spacer(modifier = Modifier.height(24.dp))
 
-                TransactionDetailsCard(
-                    amountPaid = displayTotal,
-                    transactionId = transactionId
+                Text(
+                    text = "Amount paid: ${formatRupee(totalAmount)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SmartKartGreen
                 )
             }
 
@@ -151,7 +149,18 @@ fun CheckoutSuccessScreen(
 }
 
 @Composable
-private fun SuccessIcon(modifier: Modifier = Modifier) {
+private fun AnimatedSuccessIcon(modifier: Modifier = Modifier) {
+    val infiniteTransition = rememberInfiniteTransition(label = "success_pulse")
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 1f,
+        targetValue = 1.08f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "success_pulse_scale"
+    )
+
     Box(
         modifier = modifier.size(120.dp),
         contentAlignment = Alignment.Center
@@ -159,6 +168,7 @@ private fun SuccessIcon(modifier: Modifier = Modifier) {
         Box(
             modifier = Modifier
                 .size(120.dp)
+                .scale(pulseScale)
                 .clip(CircleShape)
                 .background(MaterialTheme.colorScheme.primaryContainer)
         )
@@ -179,69 +189,6 @@ private fun SuccessIcon(modifier: Modifier = Modifier) {
         }
     }
 }
-
-@Composable
-private fun TransactionDetailsCard(
-    amountPaid: Double,
-    transactionId: String,
-    modifier: Modifier = Modifier
-) {
-    Surface(
-        modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant
-    ) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            TransactionRow(
-                label = "Amount paid",
-                value = formatRupee(amountPaid),
-                valueColor = SmartKartGreen,
-                emphasized = true
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            TransactionRow(
-                label = "Transaction ID",
-                value = transactionId,
-                valueColor = MaterialTheme.colorScheme.onSurface,
-                emphasized = true
-            )
-        }
-    }
-}
-
-@Composable
-private fun TransactionRow(
-    label: String,
-    value: String,
-    valueColor: androidx.compose.ui.graphics.Color,
-    emphasized: Boolean,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = if (emphasized) FontWeight.Bold else FontWeight.Normal,
-            color = valueColor
-        )
-    }
-}
-
-private fun generateTransactionId(cartId: String, totalAmount: Double): String {
-    val seed = abs((cartId + totalAmount.toString()).hashCode())
-    return "TXN${seed.toString().takeLast(7).padStart(7, '0')}"
-}
-
-private const val GST_RATE = 0.05
 
 @Preview(showBackground = true)
 @Composable

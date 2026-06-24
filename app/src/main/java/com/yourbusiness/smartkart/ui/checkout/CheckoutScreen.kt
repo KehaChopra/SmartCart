@@ -1,5 +1,6 @@
 package com.yourbusiness.smartkart.ui.checkout
 
+import android.app.Activity
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -52,20 +54,28 @@ import com.yourbusiness.smartkart.ui.theme.SmartKartPaymentIcon
 @Composable
 fun CheckoutScreen(
     cartId: String,
+    sessionId: String,
     totalAmount: Double,
     items: List<SessionItem>,
-    onPaymentSuccess: (totalAmount: Double) -> Unit,
+    onPaymentSuccess: (cartId: String) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     viewModel: CheckoutViewModel = viewModel(
-        factory = CheckoutViewModelFactory(cartId, totalAmount)
+        factory = CheckoutViewModelFactory(cartId, sessionId, totalAmount)
     )
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val activity = LocalContext.current as Activity
+
+    LaunchedEffect(viewModel) {
+        viewModel.paymentSdkConfig.collect { config ->
+            openRazorpayCheckout(activity, config)
+        }
+    }
 
     LaunchedEffect(uiState) {
-        if (uiState is CheckoutUiState.Success) {
-            onPaymentSuccess((uiState as CheckoutUiState.Success).totalAmount)
+        if (uiState is CheckoutUiState.PaymentSuccess) {
+            onPaymentSuccess((uiState as CheckoutUiState.PaymentSuccess).cartId)
         }
     }
 
@@ -73,53 +83,67 @@ fun CheckoutScreen(
         containerColor = MaterialTheme.colorScheme.background,
         modifier = modifier
     ) { innerPadding ->
-        when (val state = uiState) {
-            is CheckoutUiState.Ready -> CheckoutReadyContent(
-                items = items,
-                totalAmount = state.totalAmount,
-                onPayNow = viewModel::payNow,
-                onBack = onBack,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+        ) {
+            when (val state = uiState) {
+                CheckoutUiState.Loading,
+                CheckoutUiState.CreatingOrder,
+                CheckoutUiState.AwaitingPayment -> {
+                    CheckoutOrderContent(
+                        items = items,
+                        totalAmount = viewModel.totalAmount(),
+                        isProcessing = state is CheckoutUiState.CreatingOrder,
+                        onPayNow = viewModel::initiatePayment,
+                        onBack = onBack
+                    )
+                }
 
-            CheckoutUiState.Processing -> CheckoutProcessingContent(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            )
+                CheckoutUiState.VerifyingPayment -> {
+                    CheckoutProcessingContent(
+                        message = "Verifying payment…",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
 
-            is CheckoutUiState.Success -> CheckoutProcessingContent(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            )
+                is CheckoutUiState.PaymentSuccess -> {
+                    CheckoutProcessingContent(
+                        message = "Payment confirmed…",
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
 
-            is CheckoutUiState.Error -> CheckoutErrorContent(
-                message = state.message,
-                onRetry = viewModel::retry,
-                onBack = onBack,
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(innerPadding)
-            )
+                is CheckoutUiState.PaymentFailed -> CheckoutErrorContent(
+                    title = "Payment failed",
+                    message = state.reason,
+                    onRetry = viewModel::retry,
+                    onBack = onBack,
+                    modifier = Modifier.fillMaxSize()
+                )
+
+                is CheckoutUiState.Error -> CheckoutErrorContent(
+                    title = "Could not start payment",
+                    message = state.message,
+                    onRetry = viewModel::retry,
+                    onBack = onBack,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
     }
 }
 
 @Composable
-private fun CheckoutReadyContent(
+private fun CheckoutOrderContent(
     items: List<SessionItem>,
     totalAmount: Double,
+    isProcessing: Boolean,
     onPayNow: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val subtotal = if (items.isNotEmpty()) items.sumOf { it.lineTotal } else totalAmount
-    val gst = subtotal * GST_RATE
-    val displayTotal = subtotal + gst
-
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -134,9 +158,7 @@ private fun CheckoutReadyContent(
 
         ItemsSummaryCard(
             items = items,
-            subtotal = subtotal,
-            gst = gst,
-            total = displayTotal
+            totalAmount = totalAmount
         )
 
         Spacer(modifier = Modifier.height(16.dp))
@@ -147,26 +169,37 @@ private fun CheckoutReadyContent(
 
         Button(
             onClick = onPayNow,
+            enabled = !isProcessing,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(56.dp),
             shape = RoundedCornerShape(12.dp),
             colors = ButtonDefaults.buttonColors(
                 containerColor = SmartKartGreen,
-                contentColor = MaterialTheme.colorScheme.onPrimary
+                contentColor = MaterialTheme.colorScheme.onPrimary,
+                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant
             )
         ) {
-            Icon(
-                imageVector = Icons.Filled.Lock,
-                contentDescription = null,
-                modifier = Modifier.size(18.dp)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Text(
-                text = "Confirm and Pay ${formatRupee(displayTotal)}",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.SemiBold
-            )
+            if (isProcessing) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(22.dp),
+                    strokeWidth = 2.dp,
+                    color = MaterialTheme.colorScheme.onPrimary
+                )
+            } else {
+                Icon(
+                    imageVector = Icons.Filled.Lock,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Pay Now ${formatRupee(totalAmount)}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
         }
 
         Spacer(modifier = Modifier.height(12.dp))
@@ -223,9 +256,7 @@ private fun CheckoutTopBar(
 @Composable
 private fun ItemsSummaryCard(
     items: List<SessionItem>,
-    subtotal: Double,
-    gst: Double,
-    total: Double,
+    totalAmount: Double,
     modifier: Modifier = Modifier
 ) {
     Card(
@@ -248,8 +279,8 @@ private fun ItemsSummaryCard(
             if (items.isEmpty()) {
                 OrderItemRow(
                     name = "Cart total",
-                    unitDetail = formatRupee(subtotal),
-                    lineTotal = subtotal
+                    unitDetail = formatRupee(totalAmount),
+                    lineTotal = totalAmount
                 )
             } else {
                 items.forEachIndexed { index, item ->
@@ -272,10 +303,6 @@ private fun ItemsSummaryCard(
                 color = MaterialTheme.colorScheme.outline
             )
 
-            SummaryLine(label = "Subtotal", value = formatRupee(subtotal))
-            Spacer(modifier = Modifier.height(8.dp))
-            SummaryLine(label = "GST (5%)", value = formatRupee(gst))
-            Spacer(modifier = Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -288,7 +315,7 @@ private fun ItemsSummaryCard(
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    text = formatRupee(total),
+                    text = formatRupee(totalAmount),
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                     color = SmartKartGreen
@@ -313,8 +340,8 @@ private fun OrderItemRow(
         Column(modifier = Modifier.weight(1f)) {
             Text(
                 text = name,
-                style = MaterialTheme.typography.bodyLarge,
-                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface
             )
             Text(
@@ -326,32 +353,9 @@ private fun OrderItemRow(
         }
         Text(
             text = formatRupee(lineTotal),
-            style = MaterialTheme.typography.bodyLarge,
-            fontWeight = FontWeight.Bold,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
-        )
-    }
-}
-
-@Composable
-private fun SummaryLine(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier
-) {
-    Row(
-        modifier = modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
@@ -400,13 +404,13 @@ private fun PaymentMethodCard(modifier: Modifier = Modifier) {
                         .padding(horizontal = 12.dp)
                 ) {
                     Text(
-                        text = "UPI / Cards",
+                        text = "Razorpay",
                         style = MaterialTheme.typography.bodyLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
                     Text(
-                        text = "Secure payment gateway",
+                        text = "UPI, cards, and wallets",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -424,7 +428,10 @@ private fun PaymentMethodCard(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun CheckoutProcessingContent(modifier: Modifier = Modifier) {
+private fun CheckoutProcessingContent(
+    message: String,
+    modifier: Modifier = Modifier
+) {
     Column(
         modifier = modifier,
         verticalArrangement = Arrangement.Center,
@@ -433,7 +440,7 @@ private fun CheckoutProcessingContent(modifier: Modifier = Modifier) {
         CircularProgressIndicator(color = SmartKartGreen)
         Spacer(modifier = Modifier.height(16.dp))
         Text(
-            text = "Processing payment…",
+            text = message,
             style = MaterialTheme.typography.bodyLarge,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -442,6 +449,7 @@ private fun CheckoutProcessingContent(modifier: Modifier = Modifier) {
 
 @Composable
 private fun CheckoutErrorContent(
+    title: String,
     message: String,
     onRetry: () -> Unit,
     onBack: () -> Unit,
@@ -453,7 +461,7 @@ private fun CheckoutErrorContent(
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
-            text = "Payment failed",
+            text = title,
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onSurface
@@ -501,5 +509,3 @@ private fun CheckoutErrorContent(
         }
     }
 }
-
-private const val GST_RATE = 0.05

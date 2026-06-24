@@ -13,8 +13,11 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.google.firebase.FirebaseApp
 import com.google.firebase.auth.FirebaseAuth
+import com.razorpay.PaymentData
+import com.razorpay.PaymentResultWithDataListener
 import com.yourbusiness.smartkart.data.model.SessionItem
 import com.yourbusiness.smartkart.data.repository.UserRepository
+import com.yourbusiness.smartkart.payment.RazorpayPaymentBridge
 import com.yourbusiness.smartkart.ui.auth.PhoneAuthScreen
 import com.yourbusiness.smartkart.ui.cart.CartGateScreen
 import com.yourbusiness.smartkart.ui.cart.CartCheckViewModel
@@ -38,7 +41,8 @@ private enum class AppDestination {
     CHECKOUT_SUCCESS
 }
 
-class MainActivity : ComponentActivity() {
+class MainActivity : ComponentActivity(), PaymentResultWithDataListener {
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         logFirebaseConfig()
@@ -48,6 +52,42 @@ class MainActivity : ComponentActivity() {
                 SmartKartApp()
             }
         }
+    }
+
+    override fun onPaymentSuccess(razorpayPaymentId: String?, paymentData: PaymentData?) {
+        val orderId = paymentData?.orderId?.takeIf { it.isNotBlank() }
+            ?: RazorpayPaymentBridge.inFlightOrderId
+        val paymentId = razorpayPaymentId?.takeIf { it.isNotBlank() }
+            ?: paymentData?.paymentId?.takeIf { it.isNotBlank() }
+        val signature = paymentData?.signature?.takeIf { it.isNotBlank() }
+
+        if (orderId.isNullOrBlank() || paymentId.isNullOrBlank() || signature.isNullOrBlank()) {
+            RazorpayPaymentBridge.emit(
+                RazorpayPaymentBridge.SdkEvent.Failure(
+                    code = -1,
+                    description = "Payment succeeded but response data was incomplete."
+                )
+            )
+            return
+        }
+
+        RazorpayPaymentBridge.emit(
+            RazorpayPaymentBridge.SdkEvent.Success(
+                orderId = orderId,
+                paymentId = paymentId,
+                signature = signature
+            )
+        )
+    }
+
+    override fun onPaymentError(code: Int, description: String?, paymentData: PaymentData?) {
+        RazorpayPaymentBridge.emit(
+            RazorpayPaymentBridge.SdkEvent.Failure(
+                code = code,
+                description = description?.takeIf { it.isNotBlank() }
+                    ?: "Payment was cancelled or failed."
+            )
+        )
     }
 
     private fun logFirebaseConfig() {
@@ -81,6 +121,7 @@ private fun SmartKartApp(
     }
 
     var activeCartId by remember { mutableStateOf<String?>(null) }
+    var checkoutSessionId by remember { mutableStateOf<String?>(null) }
     var checkoutTotal by remember { mutableStateOf(0.0) }
     var checkoutItems by remember { mutableStateOf<List<SessionItem>>(emptyList()) }
 
@@ -89,6 +130,7 @@ private fun SmartKartApp(
         profileViewModel.resetForSignOut()
         cartCheckViewModel.resetForSignOut()
         activeCartId = null
+        checkoutSessionId = null
         checkoutTotal = 0.0
         checkoutItems = emptyList()
         destination = AppDestination.AUTH
@@ -155,9 +197,10 @@ private fun SmartKartApp(
             if (cartId != null) {
                 CartScreen(
                     cartId = cartId,
-                    onCheckout = { total, items ->
+                    onCheckout = { total, items, sessionId ->
                         checkoutTotal = total
                         checkoutItems = items
+                        checkoutSessionId = sessionId
                         destination = AppDestination.CHECKOUT
                     },
                     onNavigateToScanner = {
@@ -173,13 +216,15 @@ private fun SmartKartApp(
 
         AppDestination.CHECKOUT -> {
             val cartId = UserRepository.parseActiveCartValue(activeCartId)
-            if (cartId != null) {
+            val sessionId = checkoutSessionId?.trim().orEmpty()
+            if (cartId != null && sessionId.isNotBlank()) {
                 CheckoutScreen(
                     cartId = cartId,
+                    sessionId = sessionId,
                     totalAmount = checkoutTotal,
                     items = checkoutItems,
-                    onPaymentSuccess = { total ->
-                        checkoutTotal = total
+                    onPaymentSuccess = { paidCartId ->
+                        activeCartId = paidCartId
                         destination = AppDestination.CHECKOUT_SUCCESS
                     },
                     onBack = { destination = AppDestination.CART }
@@ -195,8 +240,10 @@ private fun SmartKartApp(
                 totalAmount = checkoutTotal,
                 onDone = {
                     activeCartId = null
+                    checkoutSessionId = null
                     checkoutItems = emptyList()
-                    goToCartCheck()
+                    checkoutTotal = 0.0
+                    destination = AppDestination.QR_SCANNER
                 }
             )
         }

@@ -10,4 +10,14 @@ interface CloudFunctionsApiService {
     suspend fun deleteItemFromCart(
         @Body request: RemoveItemRequest
     ): Response<BindCartResponse>
+
+    @POST("createOrder")
+    suspend fun createOrder(
+        @Body request: CreateOrderRequest
+    ): Response<CreateOrderResponse>
+
+    @POST("verifyPayment")
+    suspend fun verifyPayment(
+        @Body request: VerifyPaymentRequest
+    ): Response<VerifyPaymentResponse>
 }

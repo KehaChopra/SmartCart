@@ -47,7 +47,7 @@ import com.yourbusiness.smartkart.ui.theme.SmartKartTheme
 @Composable
 fun CartScreen(
     cartId: String,
-    onCheckout: (totalAmount: Double, items: List<SessionItem>) -> Unit,
+    onCheckout: (totalAmount: Double, items: List<SessionItem>, sessionId: String) -> Unit,
     onNavigateToScanner: () -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier,
@@ -84,7 +84,7 @@ fun CartScreen(
                 uiState = uiState,
                 onCheckout = {
                     val successState = uiState as? CartUiState.Success ?: return@CartBottomBar
-                    onCheckout(successState.totalAmount, successState.items)
+                    onCheckout(successState.totalAmount, successState.items, successState.sessionId)
                 }
             )
         },
