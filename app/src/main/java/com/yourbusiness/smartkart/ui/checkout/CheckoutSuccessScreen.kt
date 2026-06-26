@@ -83,7 +83,7 @@ fun CheckoutSuccessScreen(
                 Spacer(modifier = Modifier.height(12.dp))
 
                 Text(
-                    text = "Your cart is now unlocked.\nCollect your items.",
+                    text = "Your cart has been unlocked. Please collect your items.",
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     textAlign = TextAlign.Center,

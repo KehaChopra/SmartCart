@@ -32,8 +32,12 @@ class QrScannerViewModel(
             _uiState.value = QrScannerUiState.Loading
 
             cartRepository.bindCartToUser(cartId)
-                .onSuccess { boundCartId ->
-                    _uiState.value = QrScannerUiState.Success(boundCartId)
+                .onSuccess { bindResult ->
+                    isProcessingScan = false
+                    _uiState.value = QrScannerUiState.Success(
+                        cartId = bindResult.cartId,
+                        sessionId = bindResult.sessionId
+                    )
                 }
                 .onFailure { exception ->
                     isProcessingScan = false
@@ -48,5 +52,12 @@ class QrScannerViewModel(
     fun retryScanning() {
         isProcessingScan = false
         _uiState.value = QrScannerUiState.Scanning
+    }
+
+    fun onScreenVisible() {
+        isProcessingScan = false
+        if (_uiState.value !is QrScannerUiState.Scanning) {
+            _uiState.value = QrScannerUiState.Scanning
+        }
     }
 }

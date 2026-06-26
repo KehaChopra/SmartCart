@@ -49,6 +49,7 @@ const CART_STATUS = {
 const SESSION_STATUS = {
   ACTIVE: "active",
   COMPLETED: "completed",
+  ABANDONED: "abandoned",
 };
 
 const PAYMENT_STATUS = {
@@ -241,6 +242,35 @@ function sendPaymentFailed(res, reason) {
   });
 }
 
+/**
+ * Records a physical cart unlock and returns the unlock signal for the Pi.
+ * Cart must not be occupied (payment completed or session abandoned).
+ *
+ * @param {string} cartId
+ * @return {Promise<{unlocked: boolean, cartId: string}>}
+ */
+async function performCartUnlock(cartId) {
+  const cartRef = db.collection(COLLECTIONS.CARTS).doc(cartId);
+  const cartSnap = await cartRef.get();
+
+  if (!cartSnap.exists) {
+    throw new Error("Cart not found");
+  }
+
+  const cart = cartSnap.data();
+  if (cart.status === CART_STATUS.OCCUPIED) {
+    throw new Error("Cart is still occupied");
+  }
+
+  await cartRef.update({
+    lastUnlockedAt: FieldValue.serverTimestamp(),
+  });
+
+  logger.info("Cart unlocked", {cartId});
+
+  return {unlocked: true, cartId};
+}
+
 // ---------------------------------------------------------------------------
 // HTTP Cloud Functions
 // ---------------------------------------------------------------------------
@@ -271,8 +301,25 @@ exports.bindCartToUser = onRequest({secrets: [cartSecret]}, async (req, res) => 
       }
 
       const cart = cartSnap.data();
+      const existingSessionId = (cart.currentSessionId || "").trim();
+
       if (cart.status === CART_STATUS.OCCUPIED) {
-        throw new Error("Cart already in use");
+        if (!existingSessionId) {
+          throw new Error("Cart already in use");
+        }
+
+        const sessionRef = db.collection(COLLECTIONS.SESSIONS).doc(existingSessionId);
+        const sessionSnap = await transaction.get(sessionRef);
+
+        if (sessionSnap.exists) {
+          const session = sessionSnap.data();
+          if (session.status === SESSION_STATUS.ACTIVE) {
+            if (session.userId === userId) {
+              return existingSessionId;
+            }
+            throw new Error("Cart already in use");
+          }
+        }
       }
 
       const sessionRef = db.collection(COLLECTIONS.SESSIONS).doc();
@@ -653,10 +700,25 @@ exports.verifyPayment = onRequest({secrets: paymentSecrets}, async (req, res) =>
 
     const payment = paymentSnap.data();
     if (payment.status === PAYMENT_STATUS.PAID) {
+      let unlockResult = null;
+      if (payment.cartId) {
+        try {
+          unlockResult = await performCartUnlock(payment.cartId);
+        } catch (unlockError) {
+          const unlockMessage = unlockError instanceof Error ?
+            unlockError.message : "Unknown unlock error";
+          logger.warn("verifyPayment unlock skipped (already paid)", {
+            cartId: payment.cartId,
+            error: unlockMessage,
+          });
+        }
+      }
+
       sendSuccess(res, {
         status: "paid",
         sessionId: payment.sessionId,
         cartId: payment.cartId,
+        ...(unlockResult || {}),
       });
       return;
     }
@@ -707,10 +769,23 @@ exports.verifyPayment = onRequest({secrets: paymentSecrets}, async (req, res) =>
       });
     });
 
+    let unlockResult = null;
+    try {
+      unlockResult = await performCartUnlock(cartId);
+    } catch (unlockError) {
+      const unlockMessage = unlockError instanceof Error ?
+        unlockError.message : "Unknown unlock error";
+      logger.error("verifyPayment succeeded but cart unlock failed", {
+        cartId,
+        error: unlockMessage,
+      });
+    }
+
     sendSuccess(res, {
       status: "paid",
       sessionId,
       cartId,
+      ...(unlockResult || {}),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -727,5 +802,135 @@ exports.verifyPayment = onRequest({secrets: paymentSecrets}, async (req, res) =>
     }
 
     sendPaymentFailed(res, "Could not verify payment");
+  }
+});
+
+/**
+ * Abandons an active shopping session and frees the cart without payment.
+ *
+ * POST body: { cartId: string, sessionId: string, userId: string, secret: string }
+ * Success: { success: true, message: string }
+ */
+exports.abandonCart = onRequest({secrets: [cartSecret]}, async (req, res) => {
+  if (rejectUnauthorized(req, res)) return;
+
+  const {cartId, sessionId, userId} = req.body || {};
+
+  if (!cartId || !sessionId || !userId) {
+    sendError(res, 400, "cartId, sessionId, and userId are required");
+    return;
+  }
+
+  try {
+    const sessionRef = db.collection(COLLECTIONS.SESSIONS).doc(sessionId);
+    const cartRef = db.collection(COLLECTIONS.CARTS).doc(cartId);
+    const userRef = db.collection(COLLECTIONS.USERS).doc(userId);
+
+    await db.runTransaction(async (transaction) => {
+      const sessionSnap = await transaction.get(sessionRef);
+      if (!sessionSnap.exists) {
+        throw new Error("Session not found");
+      }
+
+      const session = sessionSnap.data();
+      if (session.userId !== userId) {
+        throw new Error("Session does not belong to this user");
+      }
+
+      if (session.cartId !== cartId) {
+        throw new Error("Session does not belong to this cart");
+      }
+
+      if (session.status !== SESSION_STATUS.ACTIVE) {
+        throw new Error("Session is not active");
+      }
+
+      const cartSnap = await transaction.get(cartRef);
+      if (!cartSnap.exists) {
+        throw new Error("Cart not found");
+      }
+
+      const cart = cartSnap.data();
+      if (cart.currentSessionId !== sessionId) {
+        throw new Error("Cart is not linked to this session");
+      }
+
+      transaction.update(sessionRef, {
+        status: SESSION_STATUS.ABANDONED,
+        abandonedAt: FieldValue.serverTimestamp(),
+      });
+
+      transaction.update(cartRef, {
+        status: CART_STATUS.IDLE,
+        pairedUid: null,
+        currentSessionId: null,
+      });
+
+      transaction.update(userRef, {
+        activeCart: null,
+      });
+    });
+
+    sendSuccess(res, {
+      message: "Cart session abandoned successfully",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    if (message === "Session not found" || message === "Cart not found") {
+      sendError(res, 404, message);
+      return;
+    }
+
+    if (
+      message === "Session does not belong to this user" ||
+      message === "Session does not belong to this cart" ||
+      message === "Session is not active" ||
+      message === "Cart is not linked to this session"
+    ) {
+      sendError(res, 400, message);
+      return;
+    }
+
+    logger.error("abandonCart failed", {cartId, sessionId, userId, error: message});
+    sendError(res, 500, "Internal server error");
+  }
+});
+
+/**
+ * Signals the Raspberry Pi to physically unlock a cart after payment.
+ * Cart must not be occupied (payment or abandon must have freed it first).
+ *
+ * POST body: { cartId: string, secret: string }
+ * Success: { success: true, unlocked: true, cartId: string }
+ */
+exports.unlockCart = onRequest({secrets: [cartSecret]}, async (req, res) => {
+  if (rejectUnauthorized(req, res)) return;
+
+  const {cartId} = req.body || {};
+
+  if (!cartId) {
+    sendError(res, 400, "cartId is required");
+    return;
+  }
+
+  try {
+    const result = await performCartUnlock(cartId);
+    sendSuccess(res, result);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+
+    if (message === "Cart not found") {
+      sendError(res, 404, message);
+      return;
+    }
+
+    if (message === "Cart is still occupied") {
+      sendError(res, 400, message);
+      return;
+    }
+
+    logger.error("unlockCart failed", {cartId, error: message});
+    sendError(res, 500, "Internal server error");
   }
 });

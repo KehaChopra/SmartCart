@@ -17,19 +17,27 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ExitToApp
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,16 +55,26 @@ import com.yourbusiness.smartkart.ui.theme.SmartKartTheme
 @Composable
 fun CartScreen(
     cartId: String,
+    sessionId: String? = null,
     onCheckout: (totalAmount: Double, items: List<SessionItem>, sessionId: String) -> Unit,
     onNavigateToScanner: () -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: CartViewModel = viewModel(factory = CartViewModelFactory(cartId))
+    viewModel: CartViewModel = viewModel(
+        key = "cart_${cartId}_${sessionId.orEmpty()}",
+        factory = CartViewModelFactory(cartId, sessionId)
+    )
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val navigationState by viewModel.navigationState.collectAsStateWithLifecycle()
-    val removingBarcodes by viewModel.removingBarcodes.collectAsStateWithLifecycle()
+    val isAbandoning by viewModel.isAbandoning.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    var showLeaveCartDialog by remember { mutableStateOf(false) }
+    val hasActiveSession = uiState is CartUiState.Empty || uiState is CartUiState.Success
+
+    LaunchedEffect(cartId, sessionId) {
+        viewModel.reloadSession()
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.snackbarMessage.collect { message ->
@@ -95,7 +113,11 @@ fun CartScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            CartHeader(cartId = cartId)
+            CartHeader(
+                cartId = cartId,
+                showExitButton = hasActiveSession && !isAbandoning,
+                onExitClick = { showLeaveCartDialog = true }
+            )
 
             Box(modifier = Modifier.fillMaxSize()) {
                 when (val state = uiState) {
@@ -103,14 +125,11 @@ fun CartScreen(
 
                     is CartUiState.Empty -> CartEmptyContent(
                         cartId = state.cartId,
-                        sessionId = state.sessionId,
                         modifier = Modifier.fillMaxSize()
                     )
 
                     is CartUiState.Success -> CartSuccessContent(
                         items = state.items,
-                        removingBarcodes = removingBarcodes,
-                        onRemoveItem = viewModel::removeItem,
                         modifier = Modifier.fillMaxSize()
                     )
 
@@ -121,14 +140,30 @@ fun CartScreen(
                         modifier = Modifier.fillMaxSize()
                     )
                 }
+
+                if (isAbandoning) {
+                    CartAbandoningOverlay()
+                }
             }
         }
+    }
+
+    if (showLeaveCartDialog) {
+        LeaveCartDialog(
+            onDismiss = { showLeaveCartDialog = false },
+            onConfirm = {
+                showLeaveCartDialog = false
+                viewModel.abandonCart()
+            }
+        )
     }
 }
 
 @Composable
 private fun CartHeader(
     cartId: String,
+    showExitButton: Boolean,
+    onExitClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -145,30 +180,46 @@ private fun CartHeader(
                 text = "My Cart",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onBackground
+                color = MaterialTheme.colorScheme.onBackground,
+                modifier = Modifier.weight(1f)
             )
 
-            Surface(
-                shape = RoundedCornerShape(50),
-                color = MaterialTheme.colorScheme.primaryContainer
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = MaterialTheme.colorScheme.primaryContainer
                 ) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(SmartKartGreen)
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(
-                        text = cartId,
-                        style = MaterialTheme.typography.labelMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = SmartKartGreen
-                    )
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(CircleShape)
+                                .background(SmartKartGreen)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = cartId,
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = SmartKartGreen
+                        )
+                    }
+                }
+
+                if (showExitButton) {
+                    IconButton(onClick = onExitClick) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Outlined.ExitToApp,
+                            contentDescription = "Leave cart",
+                            tint = SmartKartGreen
+                        )
+                    }
                 }
             }
         }
@@ -182,6 +233,65 @@ private fun CartHeader(
                 .clip(RoundedCornerShape(2.dp))
                 .background(SmartKartGreen)
         )
+    }
+}
+
+@Composable
+private fun LeaveCartDialog(
+    onDismiss: () -> Unit,
+    onConfirm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Leave Cart?",
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Text(
+                text = "Are you sure you want to exit? " +
+                    "Your cart will be cleared and unlinked from your account."
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(
+                    text = "Leave Cart",
+                    color = MaterialTheme.colorScheme.error,
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(
+                    text = "Stay",
+                    fontWeight = FontWeight.SemiBold
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun CartAbandoningOverlay(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.72f)),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(color = SmartKartGreen)
+            Spacer(modifier = Modifier.height(16.dp))
+            Text(
+                text = "Leaving cart…",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -205,7 +315,6 @@ private fun CartLoadingContent(modifier: Modifier = Modifier) {
 @Composable
 private fun CartEmptyContent(
     cartId: String,
-    sessionId: String,
     modifier: Modifier = Modifier
 ) {
     Column(
@@ -221,7 +330,7 @@ private fun CartEmptyContent(
         Spacer(modifier = Modifier.height(16.dp))
 
         Text(
-            text = "Scan items to start shopping",
+            text = "Scan items using the cart scanner to start shopping",
             style = MaterialTheme.typography.titleLarge,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground,
@@ -231,17 +340,8 @@ private fun CartEmptyContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "Your cart $cartId is ready. Add products by scanning their barcodes.",
+            text = "Your cart $cartId is ready. Items will appear here as you scan them.",
             style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center
-        )
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text(
-            text = "Firestore path for testing:\nsessions/$sessionId → items",
-            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
@@ -251,8 +351,6 @@ private fun CartEmptyContent(
 @Composable
 private fun CartSuccessContent(
     items: List<SessionItem>,
-    removingBarcodes: Set<String>,
-    onRemoveItem: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
     LazyColumn(
@@ -264,11 +362,7 @@ private fun CartSuccessContent(
             items = items,
             key = { item -> item.barcode }
         ) { item ->
-            CartItemRow(
-                item = item,
-                isRemoving = removingBarcodes.contains(item.barcode),
-                onRemove = { onRemoveItem(item.barcode) }
-            )
+            CartItemRow(item = item)
         }
 
         item {

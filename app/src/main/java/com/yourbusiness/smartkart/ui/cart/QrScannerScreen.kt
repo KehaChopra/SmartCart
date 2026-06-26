@@ -65,15 +65,16 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun QrScannerScreen(
-    onCartBound: (cartId: String) -> Unit,
+    onCartBound: (cartId: String, sessionId: String) -> Unit,
     onSignOut: () -> Unit,
     modifier: Modifier = Modifier,
-    viewModel: QrScannerViewModel = viewModel()
+    viewModel: QrScannerViewModel = viewModel(key = "qr_scanner")
 ) {
     val context = LocalContext.current
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     var torchEnabled by remember { mutableStateOf(false) }
+    var hasHandledBindSuccess by remember { mutableStateOf(false) }
 
     val view = LocalView.current
     if (!view.isInEditMode) {
@@ -98,17 +99,20 @@ fun QrScannerScreen(
     }
 
     LaunchedEffect(Unit) {
+        hasHandledBindSuccess = false
+        viewModel.onScreenVisible()
         if (!hasCameraPermission) {
             permissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
     LaunchedEffect(uiState) {
-        if (uiState is QrScannerUiState.Success) {
-            val cartId = (uiState as QrScannerUiState.Success).cartId
-            snackbarHostState.showSnackbar("Cart $cartId connected!")
+        if (uiState is QrScannerUiState.Success && !hasHandledBindSuccess) {
+            hasHandledBindSuccess = true
+            val successState = uiState as QrScannerUiState.Success
+            snackbarHostState.showSnackbar("Cart ${successState.cartId} connected!")
             delay(SUCCESS_MESSAGE_DELAY_MS)
-            onCartBound(cartId)
+            onCartBound(successState.cartId, successState.sessionId)
         }
     }
 

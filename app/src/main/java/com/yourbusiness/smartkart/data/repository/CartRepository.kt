@@ -4,13 +4,15 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.gson.Gson
 import com.yourbusiness.smartkart.data.CartBindConfig
 import com.yourbusiness.smartkart.data.CartIdParser
+import com.yourbusiness.smartkart.data.model.CartBindResult
+import com.yourbusiness.smartkart.data.api.AbandonCartRequest
+import com.yourbusiness.smartkart.data.api.AbandonCartResponse
 import com.yourbusiness.smartkart.data.api.BindCartRequest
 import com.yourbusiness.smartkart.data.api.BindCartResponse
 import com.yourbusiness.smartkart.data.api.CartApiClient
 import com.yourbusiness.smartkart.data.api.CartApiService
 import com.yourbusiness.smartkart.data.api.CloudFunctionsApiClient
 import com.yourbusiness.smartkart.data.api.CloudFunctionsApiService
-import com.yourbusiness.smartkart.data.api.RemoveItemRequest
 import retrofit2.Response
 import java.io.IOException
 
@@ -22,17 +24,21 @@ class CartRepository(
     private val gson: Gson = Gson()
 ) {
 
-    suspend fun removeItemFromCart(cartId: String, barcode: String): Result<Unit> {
-        val trimmedBarcode = barcode.trim()
-        if (trimmedBarcode.isBlank()) {
-            return Result.failure(IllegalArgumentException("Invalid item. Please try again."))
+    suspend fun abandonCart(cartId: String, sessionId: String): Result<Unit> {
+        val trimmedSessionId = sessionId.trim()
+        if (trimmedSessionId.isBlank()) {
+            return Result.failure(IllegalArgumentException("No active session. Please scan your cart again."))
         }
 
+        val userId = auth.currentUser?.uid
+            ?: return Result.failure(IllegalStateException("You are not signed in. Please log in again."))
+
         return try {
-            val response = cloudFunctionsApi.deleteItemFromCart(
-                RemoveItemRequest(
+            val response = cloudFunctionsApi.abandonCart(
+                AbandonCartRequest(
                     cartId = cartId,
-                    barcode = trimmedBarcode,
+                    sessionId = trimmedSessionId,
+                    userId = userId,
                     secret = CartBindConfig.cartSecret
                 )
             )
@@ -43,18 +49,51 @@ class CartRepository(
                     Result.success(Unit)
                 } else {
                     Result.failure(
-                        IOException(body?.error ?: "Could not remove item. Please try again.")
+                        IOException(body?.error ?: "Could not leave cart. Please try again.")
                     )
                 }
             } else {
-                Result.failure(IOException(parseRemoveErrorMessage(response)))
+                Result.failure(IOException(parseAbandonErrorMessage(response)))
             }
         } catch (exception: Exception) {
             Result.failure(exception)
         }
     }
 
-    suspend fun bindCartToUser(rawCartId: String): Result<String> {
+    // Called by Raspberry Pi hardware only — not used by the Android app.
+    // suspend fun removeItemFromCart(cartId: String, barcode: String): Result<Unit> {
+    //     val trimmedBarcode = barcode.trim()
+    //     if (trimmedBarcode.isBlank()) {
+    //         return Result.failure(IllegalArgumentException("Invalid item. Please try again."))
+    //     }
+    //
+    //     return try {
+    //         val response = cloudFunctionsApi.deleteItemFromCart(
+    //             RemoveItemRequest(
+    //                 cartId = cartId,
+    //                 barcode = trimmedBarcode,
+    //                 secret = CartBindConfig.cartSecret
+    //             )
+    //         )
+    //
+    //         if (response.isSuccessful) {
+    //             val body = response.body()
+    //             if (body?.success == true) {
+    //                 Result.success(Unit)
+    //             } else {
+    //                 Result.failure(
+    //                     IOException(body?.error ?: "Could not remove item. Please try again.")
+    //                 )
+    //             }
+    //         } else {
+    //             Result.failure(IOException(parseRemoveErrorMessage(response)))
+    //         }
+    //     } catch (exception: Exception) {
+    //         Result.failure(exception)
+    //     }
+    // }
+
+    suspend fun bindCartToUser(rawCartId: String): Result<CartBindResult> {
         val trimmedCartId = CartIdParser.parse(rawCartId)
         if (trimmedCartId.isNullOrBlank()) {
             return Result.failure(IllegalArgumentException("Invalid QR code. Please scan a cart QR code."))
@@ -75,9 +114,18 @@ class CartRepository(
             if (response.isSuccessful) {
                 val body = response.body()
                 if (body?.success == true) {
+                    val sessionId = body.sessionId?.trim().orEmpty()
+                    if (sessionId.isBlank()) {
+                        return Result.failure(
+                            IOException("Cart connected but session id was missing. Please try again.")
+                        )
+                    }
+
                     userRepository.updateActiveCart(userId, trimmedCartId)
                         .fold(
-                            onSuccess = { Result.success(trimmedCartId) },
+                            onSuccess = {
+                                Result.success(CartBindResult(trimmedCartId, sessionId))
+                            },
                             onFailure = { firestoreError ->
                                 Result.failure(
                                     IOException(
@@ -113,22 +161,39 @@ class CartRepository(
         return userRepository.mapExceptionToMessage(exception)
     }
 
-    private fun parseRemoveErrorMessage(response: Response<BindCartResponse>): String {
+    private fun parseAbandonErrorMessage(response: Response<AbandonCartResponse>): String {
         val errorBody = response.errorBody()?.string()
         if (!errorBody.isNullOrBlank()) {
             runCatching {
-                gson.fromJson(errorBody, BindCartResponse::class.java)?.error
+                gson.fromJson(errorBody, AbandonCartResponse::class.java)?.error
             }.getOrNull()?.takeIf { it.isNotBlank() }?.let { return it }
         }
 
         return when (response.code()) {
             403 -> "Unauthorized request. Please update the app and try again."
-            404 -> "Item not found in cart."
-            400 -> "No active shopping session. Please scan your cart again."
+            404 -> "Cart or session not found. Please scan your cart again."
+            400 -> "This cart session is no longer active."
             500 -> "Server error. Please try again in a moment."
-            else -> "Could not remove item. Please try again."
+            else -> "Could not leave cart. Please try again."
         }
     }
+
+    // private fun parseRemoveErrorMessage(response: Response<BindCartResponse>): String {
+    //     val errorBody = response.errorBody()?.string()
+    //     if (!errorBody.isNullOrBlank()) {
+    //         runCatching {
+    //             gson.fromJson(errorBody, BindCartResponse::class.java)?.error
+    //         }.getOrNull()?.takeIf { it.isNotBlank() }?.let { return it }
+    //     }
+    //
+    //     return when (response.code()) {
+    //         403 -> "Unauthorized request. Please update the app and try again."
+    //         404 -> "Item not found in cart."
+    //         400 -> "No active shopping session. Please scan your cart again."
+    //         500 -> "Server error. Please try again in a moment."
+    //         else -> "Could not remove item. Please try again."
+    //     }
+    // }
 
     private fun parseErrorMessage(response: Response<BindCartResponse>): String {
         val errorBody = response.errorBody()?.string()

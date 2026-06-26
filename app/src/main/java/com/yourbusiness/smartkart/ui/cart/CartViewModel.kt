@@ -20,6 +20,7 @@ import kotlinx.coroutines.launch
 
 class CartViewModel(
     private val cartId: String,
+    private val knownSessionId: String? = null,
     private val sessionRepository: SessionRepository = SessionRepository(),
     private val cartRepository: CartRepository = CartRepository(),
     private val userRepository: UserRepository = UserRepository(),
@@ -35,12 +36,18 @@ class CartViewModel(
     private val _removingBarcodes = MutableStateFlow<Set<String>>(emptySet())
     val removingBarcodes: StateFlow<Set<String>> = _removingBarcodes.asStateFlow()
 
+    private val _isAbandoning = MutableStateFlow(false)
+    val isAbandoning: StateFlow<Boolean> = _isAbandoning.asStateFlow()
+
     private val _snackbarMessage = MutableSharedFlow<String>(extraBufferCapacity = 1)
     val snackbarMessage: SharedFlow<String> = _snackbarMessage.asSharedFlow()
 
     private var hasHandledSessionEnded = false
 
-    init {
+    fun reloadSession() {
+        hasHandledSessionEnded = false
+        _isAbandoning.value = false
+        sessionRepository.removeListener()
         startSessionListener()
     }
 
@@ -48,7 +55,26 @@ class CartViewModel(
         viewModelScope.launch {
             _uiState.value = CartUiState.Loading
 
-            sessionRepository.observeCartSession(cartId) { result ->
+            val bootstrapResult = if (!knownSessionId.isNullOrBlank()) {
+                sessionRepository.loadSessionOnce(knownSessionId)
+            } else {
+                sessionRepository.loadCartSessionOnce(cartId)
+            }
+
+            bootstrapResult.fold(
+                onSuccess = { session -> updateUiFromSession(session) },
+                onFailure = { exception ->
+                    if (sessionRepository.isSessionEndedError(exception)) {
+                        handleSessionEnded()
+                        return@launch
+                    }
+                    _uiState.value = CartUiState.Error(
+                        sessionRepository.mapExceptionToMessage(exception)
+                    )
+                }
+            )
+
+            val onSessionUpdate: (Result<ShoppingSession>) -> Unit = { result ->
                 result.fold(
                     onSuccess = { session -> updateUiFromSession(session) },
                     onFailure = { exception ->
@@ -62,32 +88,50 @@ class CartViewModel(
                     }
                 )
             }
+
+            if (!knownSessionId.isNullOrBlank()) {
+                sessionRepository.observeSession(knownSessionId, onSessionUpdate)
+            } else {
+                sessionRepository.observeCartSession(cartId, onSessionUpdate)
+            }
         }
     }
 
-    fun removeItem(barcode: String) {
-        if (_removingBarcodes.value.contains(barcode)) return
+    fun abandonCart() {
+        if (_isAbandoning.value) return
+
+        val sessionId = when (val state = _uiState.value) {
+            is CartUiState.Empty -> state.sessionId
+            is CartUiState.Success -> state.sessionId
+            else -> return
+        }
 
         viewModelScope.launch {
-            _removingBarcodes.update { it + barcode }
+            _isAbandoning.value = true
 
-            cartRepository.removeItemFromCart(cartId, barcode)
+            cartRepository.abandonCart(cartId, sessionId)
                 .onSuccess {
-                    _removingBarcodes.update { it - barcode }
+                    sessionRepository.removeListener()
+                    val uid = auth.currentUser?.uid
+                    if (!uid.isNullOrBlank()) {
+                        userRepository.clearActiveCart(uid)
+                    }
+                    _navigationState.value = CartNavigationState.NavigateToScanner(
+                        message = "Cart session ended successfully."
+                    )
                 }
                 .onFailure { exception ->
-                    _removingBarcodes.update { it - barcode }
                     _snackbarMessage.emit(
                         cartRepository.mapExceptionToMessage(exception)
                     )
                 }
+
+            _isAbandoning.value = false
         }
     }
 
     fun retry() {
-        hasHandledSessionEnded = false
-        sessionRepository.removeListener()
-        startSessionListener()
+        reloadSession()
     }
 
     fun onNavigationHandled() {
@@ -104,7 +148,6 @@ class CartViewModel(
         hasHandledSessionEnded = true
 
         sessionRepository.removeListener()
-        _uiState.value = CartUiState.Loading
 
         viewModelScope.launch {
             val uid = auth.currentUser?.uid
@@ -145,13 +188,17 @@ class CartViewModel(
 }
 
 class CartViewModelFactory(
-    private val cartId: String
+    private val cartId: String,
+    private val sessionId: String? = null
 ) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(CartViewModel::class.java)) {
-            return CartViewModel(cartId = cartId) as T
+            return CartViewModel(
+                cartId = cartId,
+                knownSessionId = sessionId
+            ) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
     }

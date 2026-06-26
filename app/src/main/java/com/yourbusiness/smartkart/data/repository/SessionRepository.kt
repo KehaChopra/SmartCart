@@ -42,6 +42,54 @@ class SessionRepository(
         }
     }
 
+    suspend fun loadSessionOnce(sessionId: String): Result<ShoppingSession> {
+        val trimmedSessionId = sessionId.trim()
+        if (trimmedSessionId.isBlank()) {
+            return Result.failure(
+                IllegalStateException("No active session for this cart. Please scan the cart QR code again.")
+            )
+        }
+
+        return try {
+            val snapshot = firestore.collection(SESSIONS_COLLECTION)
+                .document(trimmedSessionId)
+                .get()
+                .await()
+
+            if (!snapshot.exists()) {
+                return Result.failure(IllegalStateException("Shopping session not found."))
+            }
+
+            Result.success(parseSession(snapshot))
+        } catch (exception: Exception) {
+            Result.failure(exception)
+        }
+    }
+
+    suspend fun loadCartSessionOnce(cartId: String): Result<ShoppingSession> {
+        return try {
+            val cartSnapshot = firestore.collection(CARTS_COLLECTION)
+                .document(cartId)
+                .get()
+                .await()
+
+            if (!cartSnapshot.exists()) {
+                return Result.failure(IllegalStateException("Cart not found. Please scan a cart again."))
+            }
+
+            val sessionId = cartSnapshot.getString(FIELD_CURRENT_SESSION_ID)?.trim()
+            if (sessionId.isNullOrBlank()) {
+                return Result.failure(
+                    IllegalStateException("No active session for this cart. Please scan the cart QR code again.")
+                )
+            }
+
+            loadSessionOnce(sessionId)
+        } catch (exception: Exception) {
+            Result.failure(exception)
+        }
+    }
+
     /**
      * Listens to the cart document for [currentSessionId], then attaches a real-time
      * listener on that session document's [items] field.

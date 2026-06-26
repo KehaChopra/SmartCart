@@ -6,10 +6,11 @@ import retrofit2.http.POST
 
 interface CloudFunctionsApiService {
 
-    @POST("deleteItemFromCart")
-    suspend fun deleteItemFromCart(
-        @Body request: RemoveItemRequest
-    ): Response<BindCartResponse>
+    // Called by Raspberry Pi hardware only — not used by the Android app.
+    // @POST("deleteItemFromCart")
+    // suspend fun deleteItemFromCart(
+    //     @Body request: RemoveItemRequest
+    // ): Response<BindCartResponse>
 
     @POST("createOrder")
     suspend fun createOrder(
@@ -20,4 +21,14 @@ interface CloudFunctionsApiService {
     suspend fun verifyPayment(
         @Body request: VerifyPaymentRequest
     ): Response<VerifyPaymentResponse>
+
+    @POST("abandonCart")
+    suspend fun abandonCart(
+        @Body request: AbandonCartRequest
+    ): Response<AbandonCartResponse>
+
+    @POST("unlockCart")
+    suspend fun unlockCart(
+        @Body request: UnlockCartRequest
+    ): Response<UnlockCartResponse>
 }

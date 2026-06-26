@@ -121,6 +121,7 @@ private fun SmartKartApp(
     }
 
     var activeCartId by remember { mutableStateOf<String?>(null) }
+    var activeSessionId by remember { mutableStateOf<String?>(null) }
     var checkoutSessionId by remember { mutableStateOf<String?>(null) }
     var checkoutTotal by remember { mutableStateOf(0.0) }
     var checkoutItems by remember { mutableStateOf<List<SessionItem>>(emptyList()) }
@@ -130,6 +131,7 @@ private fun SmartKartApp(
         profileViewModel.resetForSignOut()
         cartCheckViewModel.resetForSignOut()
         activeCartId = null
+        activeSessionId = null
         checkoutSessionId = null
         checkoutTotal = 0.0
         checkoutItems = emptyList()
@@ -184,8 +186,9 @@ private fun SmartKartApp(
 
         AppDestination.QR_SCANNER -> {
             QrScannerScreen(
-                onCartBound = { cartId ->
+                onCartBound = { cartId, sessionId ->
                     activeCartId = cartId
+                    activeSessionId = sessionId
                     destination = AppDestination.CART
                 },
                 onSignOut = ::signOut
@@ -197,6 +200,7 @@ private fun SmartKartApp(
             if (cartId != null) {
                 CartScreen(
                     cartId = cartId,
+                    sessionId = activeSessionId?.trim()?.takeIf { it.isNotBlank() },
                     onCheckout = { total, items, sessionId ->
                         checkoutTotal = total
                         checkoutItems = items
@@ -205,6 +209,7 @@ private fun SmartKartApp(
                     },
                     onNavigateToScanner = {
                         activeCartId = null
+                        activeSessionId = null
                         destination = AppDestination.QR_SCANNER
                     },
                     onSignOut = ::signOut
@@ -240,6 +245,7 @@ private fun SmartKartApp(
                 totalAmount = checkoutTotal,
                 onDone = {
                     activeCartId = null
+                    activeSessionId = null
                     checkoutSessionId = null
                     checkoutItems = emptyList()
                     checkoutTotal = 0.0
